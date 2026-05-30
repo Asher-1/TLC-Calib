@@ -1,6 +1,6 @@
 <p align="center">
 
-<h1 align="center">Targetless LiDAR-Camera Calibration with Neural Gaussian Splatting</h1>
+<h1 align="center">Targetless LiDAR-Camera Calibration with<br>Neural Gaussian Splatting</h1>
   <p align="center">
     <a href="https://haebeom.com/" target="_blank">Haebeom Jung</a><sup>1</sup>
     &middot;
@@ -16,15 +16,6 @@
 
 <h2 align="center">IEEE RA-L 2026 (ICRA 2026)</h2>
 
-<h3 align="center">
-  <a href="https://arxiv.org/abs/2504.04597" target="_blank">arXiv</a>
-  |
-  <a href="https://ieeexplore.ieee.org/document/11397170" target="_blank">Paper</a>
-  |
-  <a href="https://www.haebeom.com/tlc-calib-site/" target="_blank">Project Page</a>
-  |
-  <a href="https://drive.google.com/drive/folders/1P9EcXuyUL9NZpgj-IU44-UfJUDiEZ7zg?usp=drive_link" target="_blank">Dataset</a>
-</h3>
   <p align="center">
     <a href="https://arxiv.org/abs/2504.04597"><img src="https://img.shields.io/badge/arXiv-2504.04597-b31b1b.svg"></a>
     <a href="https://ieeexplore.ieee.org/document/11397170"><img src="https://img.shields.io/badge/IEEE-11397170-00629B.svg"></a>

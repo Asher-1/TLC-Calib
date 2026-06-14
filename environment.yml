@@ -4,7 +4,6 @@ channels:
   - pytorch
   - pyg
   - conda-forge
-  - defaults
 
 dependencies:
   - python=3.9
@@ -18,9 +17,9 @@ dependencies:
   - pytorch-scatter
   - plyfile=0.8.1
   - tqdm
-  - yaml
+  - pyyaml
   - matplotlib
-  - opencv
+  - py-opencv
 
   - pip:
     - einops

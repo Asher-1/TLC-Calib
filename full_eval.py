@@ -13,26 +13,18 @@ import argparse
 import json
 import os
 import re
-import shlex
-import subprocess
+import sys
 from pathlib import Path
 
-
-# Path to the downloaded processed TLC-Calib dataset.
-DEFAULT_DATA_PATH = "/path/to/TLC-Calib"
-DEFAULT_TRAIN_ARGS = [
-    "--eval",
-    "--from_lidar",
-    "--use_rig",
-    "--opt_pose",
-    "--pose_scheduler",
-    "--adaptive_voxel",
-]
-DATASET_ALIASES = {
-    "kitti-360": "kitti-360",
-    "fast-livo2": "fast-livo2",
-    "waymo": "waymo",
-}
+from utils.parallel_launch import (
+    DEFAULT_DATA_PATH,
+    DATASET_ALIASES,
+    discover_scenes,
+    make_run_name,
+    resolve_gpu_ids,
+    run_parallel_eval,
+    run_single_eval,
+)
 
 
 def get_directories(path):
@@ -50,35 +42,33 @@ def normalize_dataset_name(dataset_name):
     return DATASET_ALIASES.get(dataset_name.lower(), dataset_name.lower())
 
 
-def discover_scenes(data_path, datasets=None, scenes=None):
-    data_path = Path(data_path)
-    requested_datasets = {normalize_dataset_name(name) for name in datasets or []}
-    requested_scenes = set(scenes or [])
-
-    discovered = []
-    for dataset_dir in sorted(path for path in data_path.iterdir() if path.is_dir()):
-        dataset_key = normalize_dataset_name(dataset_dir.name)
-        if requested_datasets and dataset_key not in requested_datasets and dataset_dir.name not in requested_datasets:
-            continue
-
-        for scene_dir in sorted(path for path in dataset_dir.iterdir() if path.is_dir()):
-            if requested_scenes and scene_dir.name not in requested_scenes:
-                continue
-            discovered.append((dataset_key, dataset_dir.name, scene_dir.name, scene_dir))
-
-    return discovered
-
-
-def run_command(command, cwd):
-    printable = " ".join(shlex.quote(str(part)) for part in command)
-    print(f"\n\033[1m[CMD]\033[0m {printable}")
-    return subprocess.run(command, cwd=cwd, check=True).returncode
-
-
-def make_run_name(repeat_idx, repeat_count):
-    if repeat_count == 1:
-        return "eval"
-    return f"eval_{repeat_idx + 1:02d}"
+def run_scene_pipeline(
+    repo_root,
+    dataset_key,
+    dataset_dir_name,
+    scene_name,
+    source_path,
+    model_path,
+    model_iter,
+    train_extra_args,
+    gpu_id=None,
+    skip_nvs=False,
+):
+    job = {
+        "dataset_key": dataset_key,
+        "dataset_dir_name": dataset_dir_name,
+        "scene_name": scene_name,
+        "source_path": source_path,
+        "model_path": model_path,
+    }
+    return run_single_eval(
+        repo_root=repo_root,
+        job=job,
+        gpu_id=gpu_id,
+        model_iter=model_iter,
+        train_extra_args=train_extra_args,
+        skip_nvs=skip_nvs,
+    )
 
 
 def run_full_eval(args, train_extra_args):
@@ -92,6 +82,33 @@ def run_full_eval(args, train_extra_args):
     if not scenes:
         raise RuntimeError(f"No scenes found under {data_path}")
 
+    if args.parallel:
+        jobs, output_root = run_parallel_eval(
+            repo_root=repo_root,
+            data_path=data_path,
+            output_root=output_root,
+            datasets=args.datasets,
+            scenes=args.scenes,
+            repeat=args.repeat,
+            model_iter=args.model_iter,
+            gpu_ids=resolve_gpu_ids(args.gpus),
+            train_extra_args=train_extra_args,
+            skip_nvs=args.skip_nvs,
+        )
+        scene_output_roots = []
+        seen = set()
+        for job in jobs:
+            key = str(job["scene_output_root"])
+            if key not in seen:
+                seen.add(key)
+                scene_output_roots.append(job["scene_output_root"])
+
+        for scene_output_root in scene_output_roots:
+            aggregate_results(scene_output_root, args.model_iter)
+
+        write_all_dataset_summaries(output_root)
+        return
+
     for dataset_key, dataset_dir_name, scene_name, source_path in scenes:
         scene_output_root = output_root / dataset_key / scene_name
         print(f"\n\033[1;34m[{dataset_dir_name}/{scene_name}]\033[0m")
@@ -99,39 +116,17 @@ def run_full_eval(args, train_extra_args):
         for repeat_idx in range(args.repeat):
             run_name = make_run_name(repeat_idx, args.repeat)
             model_path = scene_output_root / run_name
-            model_path.parent.mkdir(parents=True, exist_ok=True)
-
-            train_command = [
-                "python",
-                "train.py",
-                "-s",
-                str(source_path),
-                "-m",
-                str(model_path),
-                "--dataset",
-                dataset_key,
-                *DEFAULT_TRAIN_ARGS,
-                *train_extra_args,
-            ]
-            run_command(train_command, cwd=repo_root)
-
-            pose_metrics_command = [
-                "python",
-                "metrics_pose.py",
-                "-m",
-                str(model_path),
-            ]
-            run_command(pose_metrics_command, cwd=repo_root)
-
-            nvs_metrics_command = [
-                "python",
-                "metrics_nvs.py",
-                "-m",
-                str(model_path),
-                "--model_iter",
-                str(args.model_iter),
-            ]
-            run_command(nvs_metrics_command, cwd=repo_root)
+            run_scene_pipeline(
+                repo_root=repo_root,
+                dataset_key=dataset_key,
+                dataset_dir_name=dataset_dir_name,
+                scene_name=scene_name,
+                source_path=source_path,
+                model_path=model_path,
+                model_iter=args.model_iter,
+                train_extra_args=train_extra_args,
+                skip_nvs=args.skip_nvs,
+            )
 
         aggregate_results(scene_output_root, args.model_iter)
 
@@ -394,7 +389,26 @@ def parse_args():
     parser.add_argument("--datasets", nargs="+", help="Datasets to run, e.g. kitti-360 waymo fast-livo2.")
     parser.add_argument("--scenes", nargs="+", help="Scene names to run.")
     parser.add_argument("--repeat", type=int, default=1, help="Number of runs per scene.")
+    parser.add_argument(
+        "--parallel",
+        "-p",
+        action="store_true",
+        help="Run scenes in parallel across multiple GPUs.",
+    )
+    parser.add_argument(
+        "--gpus",
+        nargs="+",
+        default=None,
+        help="GPU ids to use in parallel mode, e.g. --gpus 0 1 2 3 or --gpus all.",
+    )
+    parser.add_argument(
+        "--skip_nvs",
+        action="store_true",
+        help="Skip NVS metrics to speed up evaluation.",
+    )
     args, train_extra_args = parser.parse_known_args()
+    if args.gpus is not None and not args.parallel:
+        args.parallel = True
     return args, train_extra_args
 
 

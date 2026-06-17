@@ -45,6 +45,7 @@ from utils.pose_utils import make_transformation, compute_ape_metrics
 import utils.viser_utils as viser_utils
 from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, OptimizationParams
+from utils.parallel_launch import add_parallel_train_args, launch_parallel_train_from_train_args
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -476,6 +477,7 @@ if __name__ == "__main__":
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
+    add_parallel_train_args(parser)
     parser.add_argument('--viewer', action='store_true', default=False)
     parser.add_argument('--ip', type=str, default="127.0.0.1")
     parser.add_argument('--port', type=int, default=8080)
@@ -488,7 +490,20 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
-    args = parser.parse_args(sys.argv[1:])
+    args, train_extra_args = parser.parse_known_args()
+
+    if args.gpus is not None and not args.parallel:
+        args.parallel = True
+
+    if args.parallel:
+        launch_parallel_train_from_train_args(args, train_extra_args)
+        sys.exit(0)
+
+    if not args.source_path:
+        parser.error("Single-scene training requires -s/--source_path.")
+    if not args.model_path:
+        parser.error("Single-scene training requires -m/--model_path.")
+
     if args.refine:
         args.save_iterations = [iteration for iteration in args.save_iterations if iteration != args.iterations]
         if (args.iterations + args.refine_iterations) not in args.save_iterations:
